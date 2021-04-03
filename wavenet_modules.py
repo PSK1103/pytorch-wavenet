@@ -85,38 +85,50 @@ class ConstantPad1d(Function):
         self.value = value
         self.pad_start = pad_start
 
-    def forward(self, input):
-        self.num_pad = self.target_size - input.size(self.dimension)
-        assert self.num_pad >= 0, 'target size has to be greater than input size'
+    @staticmethod
+    def forward(ctx, params, input):
+        t_dim = torch.tensor([params['dimension']])
+        t_num_pad = torch.tensor([params['target_size'] - input.size(params['dimension'])])
+        t_t_s = torch.tensor([params['target_size']])
+        t_val = torch.tensor([params['value']])
+        
+        assert t_num_pad.item() >= 0, 'target size has to be greater than input size'
 
-        self.input_size = input.size()
+        t_i_s = torch.tensor(input.size())
 
-        size = list(input.size())
-        size[self.dimension] = self.target_size
-        output = input.new(*tuple(size)).fill_(self.value)
+        size = t_i_s.tolist()
+        size[t_dim.item()] = t_t_s.item()
+        output = input.new(*tuple(size)).fill_(t_val.item())
         c_output = output
 
+        t_pad_start = torch.tensor([int(params['pad_start'])])
+
+        ctx.save_for_backward(t_dim,t_num_pad,t_i_s,t_pad_start)
+
         # crop output
-        if self.pad_start:
-            c_output = c_output.narrow(self.dimension, self.num_pad, c_output.size(self.dimension) - self.num_pad)
+        if params['pad_start']:
+            c_output = c_output.narrow(t_dim.item(), t_num_pad.item(), c_output.size(t_dim.item()) - t_num_pad.item())
         else:
-            c_output = c_output.narrow(self.dimension, 0, c_output.size(self.dimension) - self.num_pad)
+            c_output = c_output.narrow(t_dim.item(), 0, c_output.size(t_dim.item()) - t_num_pad.item())
 
         c_output.copy_(input)
         return output
 
-    def backward(self, grad_output):
-        grad_input = grad_output.new(*self.input_size).zero_()
+    @staticmethod
+    def backward(ctx, grad_output):
+
+        t_dim,t_num_pad,t_i_s,t_pad_start = ctx.saved_tensors
+        grad_input = grad_output.new(*t_i_s.tolist()).zero_()
         cg_output = grad_output
 
         # crop grad_output
-        if self.pad_start:
-            cg_output = cg_output.narrow(self.dimension, self.num_pad, cg_output.size(self.dimension) - self.num_pad)
+        if bool(t_pad_start.item()):
+            cg_output = cg_output.narrow(t_dim.item(), t_num_pad.item(), cg_output.size(t_dim.item()) - t_num_pad.item())
         else:
-            cg_output = cg_output.narrow(self.dimension, 0, cg_output.size(self.dimension) - self.num_pad)
+            cg_output = cg_output.narrow(t_dim.item(), 0, c_output.size(t_dim.item()) - t_num_pad.item())
 
         grad_input.copy_(cg_output)
-        return grad_input
+        return None, grad_input
 
 
 def constant_pad_1d(input,
@@ -124,4 +136,10 @@ def constant_pad_1d(input,
                     dimension=0,
                     value=0,
                     pad_start=False):
-    return ConstantPad1d(target_size, dimension, value, pad_start)(input)
+    params = {
+        'target_size': target_size,
+        'dimension': dimension,
+        'value': value,
+        'pad_start': pad_start
+    }
+    return ConstantPad1d.apply(params,input)
